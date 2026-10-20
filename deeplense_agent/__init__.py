@@ -5,6 +5,7 @@ An agentic workflow wrapping the DeepLenseSim simulation pipeline for strong gra
 
 from deeplense_agent.models import (
     SubstructureType,
+    SubstructureConfig,
     ModelConfiguration,
     SimulationParameters,
     SimulationPlan,
