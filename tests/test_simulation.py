@@ -77,3 +77,35 @@ def test_model_iii_hst_survey():
     assert meta.model_configuration == ModelConfiguration.MODEL_III
     assert meta.substructure_type == SubstructureType.AXION
     assert meta.subhalo_count == 100
+
+
+@pytest.mark.parametrize("model", [ModelConfiguration.MODEL_I, ModelConfiguration.MODEL_II])
+def test_same_seed_pairs_share_source_and_noise_across_substructure(model):
+    """A smooth and a CDM run with one seed must differ only through the lens."""
+    def run(sub):
+        p = SimulationParameters(model_configuration=model, substructure=dict(substructure_type=sub),
+                                 num_images=2, random_seed=2024)
+        return DeepLenseSimulationEngine(p).run(p)
+
+    smooth, cdm = run(SubstructureType.NO_SUB), run(SubstructureType.CDM)
+    for a, b in zip(smooth.output_metadata.images_metadata, cdm.output_metadata.images_metadata):
+        assert a.source_center_arcsec == b.source_center_arcsec
+        assert a.exposure_time_s == b.exposure_time_s
+    assert cdm.output_metadata.images_metadata[0].subhalo_count == 25
+
+    # Shared noise realization: the paired difference of noise residuals is far below one noise draw
+    for i in range(2):
+        res_s = smooth.images_observed[i] - smooth.images_noiseless[i]
+        res_c = cdm.images_observed[i] - cdm.images_noiseless[i]
+        assert np.std(res_s - res_c) < 0.2 * np.std(res_s)
+        assert not np.allclose(smooth.images_noiseless[i], cdm.images_noiseless[i])
+
+
+def test_shot_noise_keeps_poisson_statistics():
+    from deeplense_agent.simulation.core import add_noise
+    flux, exposure = np.full((200, 200), 2.0), 50.0  # 100 counts per pixel
+    noisy = add_noise(flux, exposure, 0.0, np.random.RandomState(0))
+    counts = noisy * exposure
+    assert abs(counts.mean() - 100) < 0.5
+    assert abs(counts.var() - 100) < 5
+    assert np.allclose(counts, np.round(counts))

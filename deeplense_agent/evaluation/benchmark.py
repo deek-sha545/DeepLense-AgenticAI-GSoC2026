@@ -20,6 +20,7 @@ import time
 from dataclasses import dataclass, field, asdict
 from typing import Any, Callable, Dict, List, Optional
 
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelResponse, ToolCallPart
 
 from deeplense_agent.agent.agent import create_pydantic_ai_agent
@@ -157,18 +158,26 @@ def rule_based_planner(prompt: str) -> Prediction:
     return Prediction(args=args, plan=ctx.active_plan, executed=ctx.last_result is not None)
 
 
-def llm_planner(model: Any, temperature: float = 0.0) -> Callable[[str], Prediction]:
+def llm_planner(model: Any, temperature: float = 0.0, rate_limit_wait_s: float = 60.0,
+                max_attempts: int = 4) -> Callable[[str], Prediction]:
     """Runs the full agent on a prompt and records its first tool_plan_simulation call."""
     agent = create_pydantic_ai_agent(model)
 
     def plan(prompt: str) -> Prediction:
-        ctx = SimulationSessionContext()
-        try:
-            result = _run_blocking(agent.run_sync, prompt, deps=ctx, model_settings={"temperature": temperature})
-            messages = result.all_messages()
-            error = None
-        except Exception as e:  # provider errors are recorded, not fatal for the whole benchmark
-            messages, error = [], f"{type(e).__name__}: {str(e)[:200]}"
+        for attempt in range(max_attempts):
+            ctx = SimulationSessionContext()
+            try:
+                result = _run_blocking(agent.run_sync, prompt, deps=ctx, model_settings={"temperature": temperature})
+                messages, error = result.all_messages(), None
+                break
+            except ModelHTTPError as e:
+                messages, error = [], f"{type(e).__name__}: {str(e)[:200]}"
+                if e.status_code != 429 or attempt == max_attempts - 1:
+                    break
+                time.sleep(rate_limit_wait_s)  # free-tier token-per-minute limit; wait for the window to reset
+            except Exception as e:  # provider errors are recorded, not fatal for the whole benchmark
+                messages, error = [], f"{type(e).__name__}: {str(e)[:200]}"
+                break
         calls = [
             part for m in messages if isinstance(m, ModelResponse)
             for part in m.parts if isinstance(part, ToolCallPart) and part.tool_name == "tool_plan_simulation"
@@ -180,12 +189,15 @@ def llm_planner(model: Any, temperature: float = 0.0) -> Callable[[str], Predict
 
 
 def run_benchmark(planner: Callable[[str], Prediction], cases: List[BenchmarkCase] = BENCHMARK_CASES,
-                  delay_s: float = 0.0) -> Dict[str, Any]:
+                  delay_s: float = 0.0, progress: bool = False) -> Dict[str, Any]:
     results = []
     for i, case in enumerate(cases):
         if i and delay_s:
             time.sleep(delay_s)  # stay under provider rate limits
         results.append(score_case(case, planner(case.prompt)))
+        if progress:
+            r = results[-1]
+            print(f"[{i + 1}/{len(cases)}] {'ok ' if r.exact else 'off'} {case.prompt[:60]}" + (f"  ({r.error})" if r.error else ""), flush=True)
     return summarize(results)
 
 
@@ -220,13 +232,13 @@ def format_summary(name: str, s: Dict[str, Any]) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model", action="append", default=[], help="pydantic-ai model string; repeatable")
-    ap.add_argument("--delay", type=float, default=2.0, help="seconds between LLM prompts (rate limits)")
+    ap.add_argument("--delay", type=float, default=15.0, help="seconds between LLM prompts (rate limits)")
     ap.add_argument("--json", help="write full results, including per-case scores, to this file")
     args = ap.parse_args()
 
     summaries = {"rule_based_parser": run_benchmark(rule_based_planner)}
     for model in args.model:
-        summaries[model] = run_benchmark(llm_planner(model), delay_s=args.delay)
+        summaries[model] = run_benchmark(llm_planner(model), delay_s=args.delay, progress=True)
     for name, s in summaries.items():
         print(format_summary(name, s))
     if args.json:

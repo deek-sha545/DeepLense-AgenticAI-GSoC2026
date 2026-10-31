@@ -182,3 +182,25 @@ def test_output_validator_rejects_replies_that_contradict_the_session():
     assert "Nothing has run yet" in resp.message
     retries = [p for m in session.message_history for p in m.parts if isinstance(p, RetryPromptPart)]
     assert retries and "No simulation has run yet" in str(retries[0].content)
+
+
+def test_long_conversations_are_trimmed_but_keep_the_system_prompt():
+    from pydantic_ai.messages import ModelMessagesTypeAdapter, SystemPromptPart
+    from deeplense_agent.agent.agent import HISTORY_CHAR_BUDGET
+
+    sent = []
+
+    def verbose_llm(messages, info):
+        sent.append(messages)
+        return _reply("x" * 5000, "explanation")  # long answers, like a detailed design discussion
+
+    session = DeepLenseWorkflowSession(agent_llm=FunctionModel(verbose_llm))
+    for i in range(12):
+        resp = session.chat(f"question {i}: explain the subhalo mass function")
+        assert resp.reply is not None
+
+    last = sent[-1]
+    assert len(ModelMessagesTypeAdapter.dump_json(last)) < 2 * HISTORY_CHAR_BUDGET
+    assert any(isinstance(p, SystemPromptPart) for p in last[0].parts)
+    assert "question 11" in str(last[-1].parts)
+    assert "question 0:" not in str(last)  # the oldest turns were dropped (12 x 5000 chars would not fit)

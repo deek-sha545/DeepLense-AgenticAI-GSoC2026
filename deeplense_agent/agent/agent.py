@@ -2,9 +2,11 @@
 Pydantic AI Agent instantiation and tool registration for DeepLense.
 """
 
-from typing import Optional, Dict, Any, Union
+from typing import Optional, Dict, Any, List, Union
 from pydantic import ValidationError
 from pydantic_ai import Agent, RunContext, ModelRetry, DeferredToolRequests
+from pydantic_ai.capabilities import ProcessHistory
+from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter, ModelRequest, SystemPromptPart, UserPromptPart
 from pydantic_ai.models.test import TestModel
 
 from deeplense_agent.agent.prompts import DEEPLENSE_SYSTEM_PROMPT
@@ -22,6 +24,40 @@ from deeplense_agent.models.responses import (
 )
 
 AgentOutput = Union[AgentReply, DeferredToolRequests]
+
+# About 4 characters per token: keeps the history near 4k tokens, so with the system
+# prompt and tool schemas a request stays inside free-tier per-request limits (Groq: 8k)
+HISTORY_CHAR_BUDGET = 16_000
+
+
+def _size(message: ModelMessage) -> int:
+    return len(ModelMessagesTypeAdapter.dump_json([message]))
+
+
+def trim_history(messages: List[ModelMessage]) -> List[ModelMessage]:
+    """
+    Keep the system prompt and the most recent turns that fit HISTORY_CHAR_BUDGET.
+    Cuts happen only where a user turn starts, so a tool call is never separated from its
+    result, and the current turn is always kept whole. The session state (active plan,
+    last result) lives in the deps, not the history, so dropping old turns loses no facts.
+    """
+    turn_starts = [
+        i for i, m in enumerate(messages)
+        if isinstance(m, ModelRequest) and any(isinstance(p, UserPromptPart) for p in m.parts)
+    ]
+    if len(turn_starts) < 2:
+        return messages
+    cut, used = turn_starts[-1], sum(_size(m) for m in messages[turn_starts[-1]:])
+    for start, end in zip(reversed(turn_starts[:-1]), reversed(turn_starts[1:])):
+        used += sum(_size(m) for m in messages[start:end])
+        if used > HISTORY_CHAR_BUDGET:
+            break
+        cut = start
+    if cut == turn_starts[0]:
+        return messages
+    system = [p for p in messages[0].parts if isinstance(p, SystemPromptPart)] if isinstance(messages[0], ModelRequest) else []
+    first = messages[cut]
+    return [ModelRequest(parts=[*system, *first.parts], instructions=first.instructions)] + messages[cut + 1:]
 
 
 def explain_error(e: Exception) -> str:
@@ -60,6 +96,7 @@ def create_pydantic_ai_agent(model: Any = None) -> Agent[SimulationSessionContex
         deps_type=SimulationSessionContext,
         output_type=[AgentReply, DeferredToolRequests],
         retries=3,
+        capabilities=[ProcessHistory(trim_history)],
     )
 
     @agent.tool

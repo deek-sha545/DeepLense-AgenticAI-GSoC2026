@@ -180,11 +180,14 @@ class DeepLenseWorkflowSession:
             )
         except (UnexpectedModelBehavior, ModelHTTPError, ModelAPIError) as e:
             # Keep the session usable: history is unchanged, so the user can rephrase or retry
-            return AgentTurnResponse(
-                message=f"The language model failed on that turn ({type(e).__name__}: {str(e)[:200]}). Please rephrase or try again.",
-                state=self.state,
-                plan=self.ctx.active_plan,
-            )
+            status = getattr(e, "status_code", None)
+            if status == 429:
+                hint = "The model provider's rate limit was reached. Wait about a minute and send the message again."
+            elif status == 413:
+                hint = "That request was too large for the model provider's limit. Try a shorter message, or start a new conversation."
+            else:
+                hint = f"The language model failed on that turn ({type(e).__name__}: {str(e)[:200]}). Please rephrase or try again."
+            return AgentTurnResponse(message=hint, state=self.state, plan=self.ctx.active_plan)
         return self._handle_agent_result(result, previous_result)
 
     def _handle_agent_result(

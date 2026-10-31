@@ -5,7 +5,7 @@
 [![Pydantic v2](https://img.shields.io/badge/pydantic-v2-green.svg)](https://docs.pydantic.dev/)
 [![Pydantic AI](https://img.shields.io/badge/pydantic--ai-framework-purple.svg)](https://ai.pydantic.dev/)
 [![Lenstronomy](https://img.shields.io/badge/physics-lenstronomy-orange.svg)](https://github.com/lenstronomy/lenstronomy)
-[![Tests](https://img.shields.io/badge/tests-43%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-48%20passed-brightgreen.svg)]()
 
 > **Submission for Google Summer of Code (GSoC) 2026**  
 > **Organization**: Machine Learning for Science (ML4SCI) / CERN  
@@ -76,6 +76,11 @@ The main $\theta_E$ comes from the halo mass (point-mass relation, as DeepLenseS
 ### Differences from DeepLenseSim
 Reading the reference code, a few issues stand out that this implementation avoids: in `lens.py` the Model II/III path computes noise but stores `image_real = image_model + image_model`, `set_instrument` only has a Euclid branch, and the Einstein radius uses luminosity distances with $D_{ls} = D_s - D_l$ (here: angular diameter distances). Model IV there uses pyHalo realizations for substructure; here Model IV uses the same CDM/axion generators as Models I-III so all four configurations share one substructure definition.
 
+### Controlled substructure experiments
+One seed spawns three independent random streams: the lens realization (subhalos, axion mass), the observation (source position and morphology, exposure) and the noise (one stream per image). Two runs with the same seed that differ only in substructure therefore see the same source, exposure and background noise, and shot noise is drawn with common random numbers (inverse-CDF Poisson from a shared uniform per pixel), so it stays exactly Poisson but is strongly correlated between the runs. The paired difference image then isolates the substructure: the residual noise difference is 7-30x below a single noise realization (`tests/test_simulation.py`).
+
+Known simplifications, stated so they are not mistaken for features: subhalos are point masses (no truncated NFW), placed uniformly in radius between 0.25" and 2" (projected density falling as 1/r), with DeepLenseSim's mass-function slope of -0.9 per unit mass by default (CDM predicts about -1.9; set `subhalo_mass_slope`). The reported $\theta_E$ is the macro-model Einstein radius; no effective Einstein radius or critical curves are computed.
+
 ---
 
 ## 4. Human-in-the-Loop (HITL) Workflow
@@ -129,7 +134,7 @@ python -m deeplense_agent.evaluation --model groq:openai/gpt-oss-120b  # plus an
 │       └── plotting.py               # 4-panel astrophysical diagnostic suite
 ├── notebooks/
 │   └── deeplense_agentic_workflow.ipynb # Complete interactive demonstration notebook
-├── tests/                            # Automated test suite (43 tests)
+├── tests/                            # Automated test suite (48 tests)
 │   ├── test_benchmark.py             # Benchmark scoring & safety properties
 │   ├── test_models.py                # Pydantic validation tests
 │   ├── test_simulation.py            # Simulation output & SNR tests
@@ -164,12 +169,12 @@ pytest tests/
 ```
 The full suite runs in about two seconds:
 ```text
-tests/test_benchmark.py ....                                             [  9%]
-tests/test_models.py ....                                                [ 18%]
-tests/test_physics.py ................                                   [ 55%]
-tests/test_simulation.py ....                                            [ 65%]
-tests/test_workflow.py ...............                                   [100%]
-============================== 43 passed in 2.98s ==============================
+tests/test_benchmark.py ....                                             [  8%]
+tests/test_models.py ....                                                [ 16%]
+tests/test_physics.py .................                                  [ 52%]
+tests/test_simulation.py .......                                         [ 66%]
+tests/test_workflow.py ................                                  [100%]
+============================== 48 passed in 3.81s ==============================
 ```
 
 ### Web App
@@ -235,7 +240,7 @@ It includes:
 ## 8. Compliance with GSoC 2026 Evaluation Metrics
 
 - **Agent architecture and tool design**: Pydantic AI agent with typed tools covering every physical knob; plan and refine share one validated update path; execution gated by `requires_approval`; invalid physics returned to the LLM as `ModelRetry`. Works with Groq, Anthropic, OpenAI or Gemini, and offline.
-- **Correctness of simulations**: lenstronomy survey configurations for Euclid and HST, DeepLenseSim-matched lens and substructure models, seeded noise, and physics tests (Einstein radius scalings, noise level vs reported background, SNR vs magnitude, substructure placement, vortex length vs axion mass).
+- **Correctness of simulations**: lenstronomy survey configurations for Euclid and HST, DeepLenseSim-matched lens and substructure models, independent seeded random streams for controlled paired experiments, and physics tests (Einstein radius scalings, noise level vs reported background, SNR vs magnitude, substructure placement, vortex length vs axion mass).
 - **Structured output validation**: every run returns Pydantic models with per-image Einstein radius, arc SNR, exposure, background, source position, substructure mass and the reproducing seed, and every LLM turn ends in a validated `AgentReply` that is checked against the session state.
 - **Agent evaluation**: a 26-prompt natural-language-to-parameters benchmark reports field F1, exact match, guardrail, HITL and approval-gate metrics for the offline parser and the LLM (notebook section 8c).
 - **Code modularity**: data contracts, physics, agent orchestration, visualization and the Streamlit app are separate layers.

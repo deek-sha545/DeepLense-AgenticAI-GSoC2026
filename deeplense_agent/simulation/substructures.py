@@ -153,11 +153,14 @@ def build_lens_model(
         cdm = cdm_params or CDMSubstructureParameters()
         n_halos = int(rng.poisson(cdm.n_sub)) if cdm.poisson_count else cdm.n_sub
         if n_halos > 0:
-            # Inverse-CDF sampling of a truncated power law
+            # Inverse-CDF sampling of a truncated power law (log-uniform when beta = -1)
             b = cdm.beta + 1.0
             u_vals = rng.uniform(0.0, 1.0, size=n_halos)
-            lo, hi = cdm.m_sub_min ** b, cdm.m_sub_max ** b
-            masses = (lo + (hi - lo) * u_vals) ** (1.0 / b)
+            if abs(b) < 1e-9:
+                masses = cdm.m_sub_min * (cdm.m_sub_max / cdm.m_sub_min) ** u_vals
+            else:
+                lo, hi = cdm.m_sub_min ** b, cdm.m_sub_max ** b
+                masses = (lo + (hi - lo) * u_vals) ** (1.0 / b)
             r = rng.uniform(cdm.r_min, cdm.r_max, size=n_halos)
             phi = rng.uniform(0.0, 2.0 * np.pi, size=n_halos)
             for m, ri, ph in zip(masses, r, phi):

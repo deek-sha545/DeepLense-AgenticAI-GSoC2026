@@ -154,3 +154,16 @@ def test_quality_inspection_flags_faint_arcs():
     report = inspect_simulation_quality(ctx)
     assert report["quality_assessment"] == "LOW_SNR"
     assert report["suggestions"]
+
+
+def test_subhalo_slope_of_one_samples_log_uniform_masses():
+    import numpy as np
+    from astropy.cosmology import FlatLambdaCDM
+    from deeplense_agent.models import CDMSubstructureParameters, LensMacroParameters
+    from deeplense_agent.simulation.substructures import build_lens_model
+
+    cdm = CDMSubstructureParameters(n_sub=200, beta=-1.0)
+    real = build_lens_model(LensMacroParameters(), 0.5, 1.0, FlatLambdaCDM(H0=70, Om0=0.3, Ob0=0.05),
+                            "cdm", cdm_params=cdm, rng=np.random.RandomState(1))
+    assert real.substructure_count == 200
+    assert np.isfinite(real.substructure_mass) and 200 * 1e6 < real.substructure_mass < 200 * 1e10

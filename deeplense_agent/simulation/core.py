@@ -4,15 +4,19 @@ Simulates strong gravitational lensing with full instrument and noise characteri
 
 Model I renders in amplitude units with a fixed background RMS, as DeepLenseSim does.
 Models II-IV render through lenstronomy's SimAPI with survey observation configs, so
-magnitudes, sky background, read noise and PSF are consistent. All randomness (lens
-realization, source position, noise) is drawn from one seeded generator, and the seed
-is recorded in the output metadata so every run can be reproduced exactly.
+magnitudes, sky background, read noise and PSF are consistent. Randomness comes from
+three independent streams spawned from one recorded seed: the lens realization
+(subhalos, axion mass and vortex), the observation (source position and morphology,
+exposure) and the noise. Runs with the same seed that differ only in substructure
+therefore share the source, exposure and background noise realization, so their
+difference isolates the substructure (Poisson shot noise still follows each image's flux).
 """
 
 import time
 from typing import Any, Dict, List, Optional
 
 import numpy as np
+from scipy.stats import poisson
 from astropy.cosmology import FlatLambdaCDM
 import lenstronomy.Util.util as util
 from lenstronomy.Data.imaging_data import ImageData
@@ -108,10 +112,17 @@ def pixelized_kappa(
 
 
 def add_noise(image: np.ndarray, exposure_time: float, background_rms: float, rng: np.random.RandomState) -> np.ndarray:
-    """Poisson shot noise on source counts plus Gaussian background, in counts/s."""
-    counts = np.clip(image, 0.0, None) * exposure_time
-    shot = rng.poisson(counts) / exposure_time - np.clip(image, 0.0, None)
+    """
+    Poisson shot noise on source counts plus Gaussian background, in counts/s.
+
+    Shot noise uses inverse-CDF sampling from one uniform draw per pixel (common random
+    numbers): each image gets exact Poisson statistics, and two images rendered with the
+    same noise stream get maximally correlated noise, so their difference is not swamped by it.
+    """
     background = rng.normal(0.0, background_rms, size=image.shape)
+    u = np.clip(rng.uniform(size=image.shape), 1e-12, 1.0 - 1e-12)
+    counts = np.clip(image, 0.0, None) * exposure_time
+    shot = poisson.ppf(u, counts) / exposure_time - np.clip(image, 0.0, None)
     return image + shot + background
 
 
@@ -146,7 +157,11 @@ class DeepLenseSimulationEngine:
         start_time = time.time()
         p = params or self.parameters
         seed = p.random_seed if p.random_seed is not None else int(np.random.SeedSequence().generate_state(1)[0])
-        rng = np.random.RandomState(seed)
+        lens_seq, obs_seq, noise_seq = np.random.SeedSequence(seed).spawn(3)
+        lens_rng = np.random.RandomState(lens_seq.generate_state(1)[0])
+        rng = np.random.RandomState(obs_seq.generate_state(1)[0])
+        # One noise stream per image, so flux-dependent Poisson draws never shift a later image's noise
+        noise_rngs = [np.random.RandomState(c.generate_state(1)[0]) for c in noise_seq.spawn(p.num_images)]
         cosmo = FlatLambdaCDM(H0=p.cosmology.H0, Om0=p.cosmology.Om0, Ob0=p.cosmology.Ob0)
 
         inst = get_instrument_spec(p.model_configuration, p.num_pix)
@@ -162,7 +177,7 @@ class DeepLenseSimulationEngine:
         observed, noiseless, sources, kappas = [], [], [], []
         image_meta: List[SingleImageMetadata] = []
 
-        for idx in range(p.num_images):
+        for idx, noise_rng in enumerate(noise_rngs):
             realization = build_lens_model(
                 lens_params=lens_params,
                 z_lens=p.z_lens,
@@ -171,7 +186,7 @@ class DeepLenseSimulationEngine:
                 substructure_type=sub_type.value,
                 cdm_params=p.substructure.cdm_params,
                 axion_params=p.substructure.axion_params,
-                rng=rng,
+                rng=lens_rng,
                 theta_E=theta_e,
             )
             sp = p.source_params
@@ -179,9 +194,9 @@ class DeepLenseSimulationEngine:
             src_y = sp.center_y if sp.center_y is not None else float(rng.uniform(-sp.position_scatter, sp.position_scatter))
 
             if band is None:
-                rendered = self._render_model_i(p, realization, src_x, src_y, lens_light, num_pix, delta_pix, x_grid, y_grid, rng)
+                rendered = self._render_model_i(p, realization, src_x, src_y, lens_light, num_pix, delta_pix, x_grid, y_grid, rng, noise_rng)
             else:
-                rendered = self._render_survey(p, band, realization, src_x, src_y, lens_light, num_pix, x_grid, y_grid, rng)
+                rendered = self._render_survey(p, band, realization, src_x, src_y, lens_light, num_pix, x_grid, y_grid, rng, noise_rng)
             image, model, arc, src_plane, exposure, bkg_rms, source_kind = rendered
 
             snr, peak_snr = signal_to_noise(arc, model, exposure, bkg_rms)
@@ -270,7 +285,7 @@ class DeepLenseSimulationEngine:
              "e1": 0.0, "e2": 0.3, "center_x": cx, "center_y": cy},
         ]
 
-    def _render_model_i(self, p, realization, src_x, src_y, lens_light, num_pix, delta_pix, x_grid, y_grid, rng):
+    def _render_model_i(self, p, realization, src_x, src_y, lens_light, num_pix, delta_pix, x_grid, y_grid, rng, noise_rng):
         """DeepLense Model I: amplitude units, Gaussian PSF, exposure ~ 10^U(3, 3.5) s, background RMS 0.01."""
         inst = get_instrument_spec(ModelConfiguration.MODEL_I, num_pix)
         exposure = float(10 ** rng.uniform(*MODEL_I_LOG10_EXPOSURE_RANGE))
@@ -307,11 +322,11 @@ class DeepLenseSimulationEngine:
         )
         model = im.image(realization.kwargs_list, kwargs_source, kwargs_lens_light)
         arc = im.image(realization.kwargs_list, kwargs_source, kwargs_lens_light, lens_light_add=False) if lens_light else model
-        image = add_noise(model, exposure, inst.background_rms, rng)
+        image = add_noise(model, exposure, inst.background_rms, noise_rng)
         src_plane = util.array2image(source_model.surface_brightness(x_grid, y_grid, kwargs_source))
         return image, model, arc, src_plane, exposure, inst.background_rms, "sersic"
 
-    def _render_survey(self, p, band, realization, src_x, src_y, lens_light, num_pix, x_grid, y_grid, rng):
+    def _render_survey(self, p, band, realization, src_x, src_y, lens_light, num_pix, x_grid, y_grid, rng, noise_rng):
         """Models II-IV: lenstronomy SimAPI with Euclid VIS or HST WFC3 observation settings."""
         sp = p.source_params
         if p.model_configuration == ModelConfiguration.MODEL_IV:
@@ -344,6 +359,6 @@ class DeepLenseSimulationEngine:
 
         exposure = float(sim.exposure_time)
         bkg_rms = float(sim.background_noise)
-        image = add_noise(model, exposure, bkg_rms, rng)
+        image = add_noise(model, exposure, bkg_rms, noise_rng)
         src_plane = util.array2image(sim.source_model_class.surface_brightness(x_grid, y_grid, kwargs_source))
         return image, model, arc, src_plane, exposure, bkg_rms, source_kind
