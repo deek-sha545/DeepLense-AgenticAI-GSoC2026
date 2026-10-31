@@ -106,7 +106,11 @@ python -m deeplense_agent.evaluation                                   # offline
 python -m deeplense_agent.evaluation --model groq:openai/gpt-oss-120b  # plus an LLM (needs GROQ_API_KEY)
 ```
 
-<!-- BENCHMARK_TABLE -->
+| Planner | Field precision | Field recall | Field F1 | Exact match | Guardrails held | Defaults flagged | Ran without approval |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| Offline rule-based parser | 1.00 | 0.84 | 0.91 | 65% | 4/4 | 22/22 | 0 |
+
+The parser never invents a value (precision 1.0) but misses paraphrases such as "three images", "lens redshift 0.6" or "cold dark matter"; closing that gap is what the LLM planner is for. Run the second command above to add an LLM row (the notebook's section 8c loads it from `notebooks/benchmark_results_llm.json`).
 
 ---
 
