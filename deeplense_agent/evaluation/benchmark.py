@@ -14,12 +14,14 @@ Run:  python -m deeplense_agent.evaluation [--model groq:openai/gpt-oss-120b]
 """
 
 import argparse
+import asyncio
 import json
 import math
 import time
 from dataclasses import dataclass, field, asdict
 from typing import Any, Callable, Dict, List, Optional
 
+from pydantic_ai import Agent
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelResponse, ToolCallPart
 
@@ -160,29 +162,43 @@ def rule_based_planner(prompt: str) -> Prediction:
 
 def llm_planner(model: Any, temperature: float = 0.0, rate_limit_wait_s: float = 60.0,
                 max_attempts: int = 4) -> Callable[[str], Prediction]:
-    """Runs the full agent on a prompt and records its first tool_plan_simulation call."""
+    """
+    Runs the agent on a prompt only until its first model response, and scores the first
+    tool_plan_simulation call in it. One request per prompt keeps the benchmark inside
+    free-tier daily token limits; the arguments then go through the same planning tool.
+    """
     agent = create_pydantic_ai_agent(model)
 
+    async def first_plan_call(prompt: str, ctx: SimulationSessionContext) -> Dict[str, Any]:
+        async with agent.iter(prompt, deps=ctx, model_settings={"temperature": temperature}) as run:
+            async for node in run:
+                if Agent.is_call_tools_node(node):
+                    calls = [p for p in node.model_response.parts
+                             if isinstance(p, ToolCallPart) and p.tool_name == "tool_plan_simulation"]
+                    return calls[0].args_as_dict() if calls else {}
+        return {}
+
     def plan(prompt: str) -> Prediction:
+        ctx, args, error = SimulationSessionContext(), {}, None
         for attempt in range(max_attempts):
-            ctx = SimulationSessionContext()
             try:
-                result = _run_blocking(agent.run_sync, prompt, deps=ctx, model_settings={"temperature": temperature})
-                messages, error = result.all_messages(), None
+                args, error = _run_blocking(lambda: asyncio.run(first_plan_call(prompt, ctx))), None
                 break
             except ModelHTTPError as e:
-                messages, error = [], f"{type(e).__name__}: {str(e)[:200]}"
-                if e.status_code != 429 or attempt == max_attempts - 1:
+                error = f"{type(e).__name__}: {str(e)[:400]}"
+                # 429: free-tier rate limit, wait for the window to reset; 400: a malformed generation, retry at once
+                retryable = e.status_code == 429 or (e.status_code == 400 and "Parsing failed" in str(e))
+                if not retryable or attempt == max_attempts - 1:
                     break
-                time.sleep(rate_limit_wait_s)  # free-tier token-per-minute limit; wait for the window to reset
+                time.sleep(rate_limit_wait_s if e.status_code == 429 else 1.0)
             except Exception as e:  # provider errors are recorded, not fatal for the whole benchmark
-                messages, error = [], f"{type(e).__name__}: {str(e)[:200]}"
+                error = f"{type(e).__name__}: {str(e)[:400]}"
                 break
-        calls = [
-            part for m in messages if isinstance(m, ModelResponse)
-            for part in m.parts if isinstance(part, ToolCallPart) and part.tool_name == "tool_plan_simulation"
-        ]
-        args = calls[0].args_as_dict() if calls else {}
+        if args:
+            try:
+                plan_simulation(ctx, **args)
+            except (ValueError, TypeError):
+                pass  # rejected by the Pydantic guardrails (or arguments the tool does not accept)
         return Prediction(args=args, plan=ctx.active_plan, executed=ctx.last_result is not None, error=error)
 
     return plan

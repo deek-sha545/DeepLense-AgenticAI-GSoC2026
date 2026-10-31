@@ -4,9 +4,11 @@ Pydantic AI Agent instantiation and tool registration for DeepLense.
 
 from typing import Optional, Dict, Any, List, Union
 from pydantic import ValidationError
-from pydantic_ai import Agent, RunContext, ModelRetry, DeferredToolRequests
+from pydantic_ai import Agent, RunContext, ModelRetry, DeferredToolRequests, TextOutput
 from pydantic_ai.capabilities import ProcessHistory
-from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter, ModelRequest, SystemPromptPart, UserPromptPart
+from pydantic_ai.messages import (
+    ModelMessage, ModelMessagesTypeAdapter, ModelRequest, SystemPromptPart, ToolReturnPart, UserPromptPart,
+)
 from pydantic_ai.models.test import TestModel
 
 from deeplense_agent.agent.prompts import DEEPLENSE_SYSTEM_PROMPT
@@ -71,6 +73,31 @@ def explain_error(e: Exception) -> str:
     return str(e)
 
 
+def reply_from_text(ctx: RunContext[SimulationSessionContext], text: str) -> AgentReply:
+    """
+    Builds the structured reply when the model answers in plain text instead of calling the
+    output tool. Text answers stay allowed because forcing a tool call (tool_choice=required)
+    makes some models fail outright, e.g. GPT-OSS on Groq with 'output_parse_failed'.
+    Intent and defaults come from the session state, so they are correct by construction.
+    """
+    plan, last = ctx.deps.active_plan, ctx.deps.last_result
+    turn: List[Any] = []
+    for m in reversed(ctx.messages):
+        if isinstance(m, ModelRequest) and any(isinstance(p, UserPromptPart) for p in m.parts):
+            break
+        turn.append(m)
+    ran_this_turn = any(
+        isinstance(p, ToolReturnPart) and p.tool_name == "tool_execute_simulation" and not isinstance(p.content, str)
+        for m in turn if isinstance(m, ModelRequest) for p in m.parts
+    )
+    if ran_this_turn and last is not None:
+        return AgentReply(message=text.strip(), intent="results")
+    if plan is not None and (last is None or last.parameters is not plan.parameters):
+        return AgentReply(message=text.strip(), intent="plan",
+                          defaulted_parameters=[c.parameter_name for c in plan.clarifications])
+    return AgentReply(message=text.strip(), intent="other")
+
+
 def create_pydantic_ai_agent(model: Any = None) -> Agent[SimulationSessionContext, AgentOutput]:
     """
     Creates and configures the Pydantic AI Agent for DeepLense with registered tool functions.
@@ -94,7 +121,7 @@ def create_pydantic_ai_agent(model: Any = None) -> Agent[SimulationSessionContex
         model=model,
         system_prompt=DEEPLENSE_SYSTEM_PROMPT,
         deps_type=SimulationSessionContext,
-        output_type=[AgentReply, DeferredToolRequests],
+        output_type=[AgentReply, TextOutput(reply_from_text), DeferredToolRequests],
         retries=3,
         capabilities=[ProcessHistory(trim_history)],
     )

@@ -204,3 +204,20 @@ def test_long_conversations_are_trimmed_but_keep_the_system_prompt():
     assert any(isinstance(p, SystemPromptPart) for p in last[0].parts)
     assert "question 11" in str(last[-1].parts)
     assert "question 0:" not in str(last)  # the oldest turns were dropped (12 x 5000 chars would not fit)
+
+
+def test_plain_text_answers_become_structured_replies():
+    def texting_llm(messages, info):
+        last = messages[-1].parts
+        returned = {p.tool_name for p in last if isinstance(p, ToolReturnPart)}
+        if "tool_execute_simulation" in returned:
+            return ModelResponse(parts=[TextPart("Run finished.")])
+        if "tool_plan_simulation" in returned:
+            return ModelResponse(parts=[TextPart("Planned a CDM lens; redshifts were defaulted.")])
+        return ModelResponse(parts=[ToolCallPart("tool_plan_simulation", {"substructure_type": "cdm"})])
+
+    session = DeepLenseWorkflowSession(agent_llm=FunctionModel(texting_llm))
+    resp = session.chat("cdm lens")
+    assert resp.reply.intent == "plan"
+    assert set(resp.reply.defaulted_parameters) == {"z_lens", "z_source"}
+    assert session.ctx.last_result is None
