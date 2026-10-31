@@ -34,13 +34,13 @@ When choosing between Pydantic AI and other frameworks (such as Orchestral AI or
 ```mermaid
 flowchart TD
     User["User Natural Language Prompt"] --> Agent["Pydantic AI Agent"]
-    Agent --> ToolPlan["Tool: plan_simulation"]
+    Agent --> ToolPlan["Tool: tool_plan_simulation"]
     ToolPlan --> Validator{"Pydantic v2 Physical Guardrails"}
     Validator -- "Invalid Physics (e.g. zl >= zs)" --> Err["ValidationError & Feedback"]
     Validator -- "Ambiguous / Missing Params" --> HITL["Human-in-the-Loop Clarification"]
     HITL --> UserClarify["User Confirms / Refines Parameters"]
-    UserClarify --> ToolRefine["Tool: refine_parameters"]
-    ToolRefine --> ToolExec["Tool: execute_deeplense_simulation"]
+    UserClarify --> ToolRefine["Tool: tool_refine_parameters"]
+    ToolRefine --> ToolExec["Tool: tool_execute_simulation (requires approval)"]
     Validator -- "Fully Specified Plan" --> ToolExec
     ToolExec --> Engine["DeepLenseSimulationEngine (Lenstronomy)"]
     Engine --> Outputs["Images (FITS/NPY) + Structured Metadata + 4-Panel Diagnostics"]
@@ -82,7 +82,7 @@ Reading the reference code, a few issues stand out that this implementation avoi
 
 When a user submits an under-specified prompt (e.g., *"Simulate a lens with subhalos"*), the agent:
 1. Detects omitted parameters (e.g., redshifts, instrument survey).
-2. Proposes physically plausible cosmological values ($z_l=0.5, z_s=1.5$).
+2. Proposes physically plausible cosmological values (DeepLense defaults $z_l=0.5, z_s=1.0$).
 3. Returns structured `ClarificationQuestion` items with the **scientific rationale** explaining why those parameters matter.
 4. Pauses compute execution until the user reviews, refines, or confirms.
 
@@ -207,8 +207,10 @@ It includes:
    - Dark matter convergence ($\kappa$) maps showing subhalo/vortex perturbations.
    - Unlensed source galaxy planes.
    - Radial surface brightness profiles.
-5. Comparative gallery across Model I, Model II, and Model III.
+5. Comparative gallery across all four configurations (Model I, II, III and IV).
 6. Structured metadata extraction and evaluation tables.
+
+**A note on the 90:10 train-test split:** that requirement applies to the ML tasks. Specific Test II trains no model, so there is no validation split and no weights to submit. This submission is evaluated on agent architecture, simulation correctness (covered by `tests/test_physics.py`), structured output validation and modularity, as listed in section 8.
 
 ---
 
