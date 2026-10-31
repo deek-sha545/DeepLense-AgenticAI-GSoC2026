@@ -1,5 +1,6 @@
 # DeepLense Agentic AI: Autonomous Lensing Simulation Pipeline
 
+[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://deeplense.streamlit.app)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![Pydantic v2](https://img.shields.io/badge/pydantic-v2-green.svg)](https://docs.pydantic.dev/)
 [![Pydantic AI](https://img.shields.io/badge/pydantic--ai-framework-purple.svg)](https://ai.pydantic.dev/)
@@ -9,6 +10,7 @@
 > **Submission for Google Summer of Code (GSoC) 2026**  
 > **Organization**: Machine Learning for Science (ML4SCI) / CERN  
 > **Project**: DeepLense — Specific Test II (Agentic AI)  
+> **Live demo**: [deeplense.streamlit.app](https://deeplense.streamlit.app)  
 > **Simulation Engine**: Wrapping [mwt5345/DeepLenseSim](https://github.com/mwt5345/DeepLenseSim) with modern Lenstronomy
 
 ---
