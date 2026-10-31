@@ -3,11 +3,11 @@ Visualization and diagnostic plotting module for DeepLense simulations.
 Generates multi-panel astrophysical figures and astronomical exports.
 """
 
-from typing import Optional, Tuple
+from typing import Optional
 import os
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.colors import LogNorm, SymLogNorm
+from matplotlib.colors import LogNorm
 
 from deeplense_agent.simulation.core import SimulationResultBundle
 
@@ -51,7 +51,7 @@ def plot_lensing_diagnostic(
     im0 = axes[0].imshow(img, origin="lower", cmap="inferno", extent=extent)
     axes[0].set_title(
         f"Mock Observation ({meta.model_configuration.value})\n"
-        f"Substructure: {meta.substructure_type.value.upper()} | SNR: {meta.estimated_snr:.1f}",
+        f"Substructure: {meta.substructure_type.value.upper()} | arc SNR: {meta.snr:.0f}",
         color="white",
         fontsize=11,
         pad=10,
@@ -74,7 +74,7 @@ def plot_lensing_diagnostic(
         norm=LogNorm(vmin=v_min, vmax=v_max) if v_min < v_max else None,
     )
     axes[1].set_title(
-        f"Dark Matter Convergence (κ)\n"
+        f"Convergence κ (pixel-averaged)\n"
         f"Subhalo count: {meta.subhalo_count} | θ_E: {meta.einstein_radius_arcsec:.3f}\"",
         color="white",
         fontsize=11,
@@ -105,7 +105,6 @@ def plot_lensing_diagnostic(
     r = np.sqrt((x_idx - cx) ** 2 + (y_idx - cy) ** 2) * meta.pixel_scale_arcsec
     r_flat = r.ravel()
     flux_flat = img.ravel()
-    sort_idx = np.argsort(r_flat)
 
     # Bin radial profile
     bins = np.linspace(0, np.max(r_flat) * 0.85, 30)

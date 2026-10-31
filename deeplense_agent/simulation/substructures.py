@@ -6,7 +6,7 @@ Supports:
 - Wave/Axion Dark Matter (quantum vortex filaments with de Broglie scale)
 """
 
-from typing import Tuple, List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional
 import numpy as np
 from astropy.cosmology import FlatLambdaCDM
 from astropy import units as u
@@ -16,7 +16,6 @@ from deeplense_agent.models.parameters import (
     LensMacroParameters,
     CDMSubstructureParameters,
     AxionSubstructureParameters,
-    CosmologyConfig,
 )
 
 
@@ -52,12 +51,43 @@ def compute_einstein_radius(
     return float(theta_rad * rad_to_arcsec)
 
 
+def isothermal_einstein_radius(
+    velocity_dispersion_kms: float,
+    z_lens: float,
+    z_source: float,
+    cosmo: FlatLambdaCDM,
+) -> float:
+    """
+    Einstein radius in arcsec of a singular isothermal sphere:
+        theta_E = 4 pi (sigma_v / c)^2 * D_ls / D_s
+    """
+    if z_source <= z_lens:
+        raise ValueError(f"Source redshift z_s ({z_source}) must exceed lens redshift z_l ({z_lens})")
+    d_s = cosmo.angular_diameter_distance(z_source).value
+    d_ls = cosmo.angular_diameter_distance(z_lens, z_source).value
+    theta_rad = 4.0 * np.pi * (velocity_dispersion_kms * 1e3 / c.value) ** 2 * d_ls / d_s
+    return float(theta_rad * 206264.806247)
+
+
+def main_einstein_radius(
+    lens_params: LensMacroParameters,
+    z_lens: float,
+    z_source: float,
+    cosmo: FlatLambdaCDM,
+) -> float:
+    """Main deflector theta_E: explicit value, else velocity dispersion, else halo mass."""
+    if lens_params.theta_E is not None:
+        return float(lens_params.theta_E)
+    if lens_params.velocity_dispersion_kms is not None:
+        return isothermal_einstein_radius(lens_params.velocity_dispersion_kms, z_lens, z_source, cosmo)
+    return compute_einstein_radius(lens_params.mass_solar, z_lens, z_source, cosmo)
+
+
 def axion_mass_to_de_broglie_arcsec(axion_mass_eV: float) -> float:
     """
-    Converts ultra-light axion mass to de Broglie wavelength scale in arcseconds (at z ~ 0.5).
-    Following DeepLenseSim calibration: lambda ~ 0.06 * (2 * m / 1e-22)^(-1) arcsec.
+    Vortex half-length in arcsec for an ultra-light axion mass, using the DeepLenseSim
+    calibration (valid for a halo at z ~ 0.5): lambda = 0.06 * (2 m / 1e-22 eV)^-1.
     """
-    # Normalized to standard 10^-22 eV scale
     ratio = float(axion_mass_eV) / 1e-22
     if ratio <= 0:
         ratio = 1.0
@@ -65,39 +95,47 @@ def axion_mass_to_de_broglie_arcsec(axion_mass_eV: float) -> float:
     return float(np.clip(de_broglie, 0.01, 1.5))
 
 
+def sample_axion_mass(rng: np.random.RandomState) -> float:
+    """Axion mass prior used by DeepLenseSim: log-uniform between 1e-24 and 1e-22 eV."""
+    return float(10 ** rng.uniform(-24.0, -22.0))
+
+
+class LensModelRealization:
+    """One random realization of the lens: lenstronomy model lists plus bookkeeping for metadata."""
+    def __init__(self, model_list, kwargs_list, theta_E, substructure_count=0, substructure_mass=0.0, axion_mass_eV=None):
+        self.model_list: List[str] = model_list
+        self.kwargs_list: List[Dict[str, Any]] = kwargs_list
+        self.theta_E: float = theta_E
+        self.substructure_count: int = substructure_count
+        self.substructure_mass: float = substructure_mass
+        self.axion_mass_eV: Optional[float] = axion_mass_eV
+
+
 def build_lens_model(
     lens_params: LensMacroParameters,
     z_lens: float,
     z_source: float,
-    cosmo_config: CosmologyConfig,
+    cosmo: FlatLambdaCDM,
     substructure_type: str,
     cdm_params: Optional[CDMSubstructureParameters] = None,
     axion_params: Optional[AxionSubstructureParameters] = None,
     rng: Optional[np.random.RandomState] = None,
-) -> Tuple[List[str], List[Dict[str, Any]], List[float], int]:
+    theta_E: Optional[float] = None,
+) -> LensModelRealization:
     """
-    Constructs the lenstronomy lens model lists (lens_model_list, kwargs_lens_list, lens_redshift_list).
-    
-    Returns:
-        lens_model_list: List of profile model names (e.g. ['SIE', 'SHEAR', 'POINT_MASS', ...])
-        kwargs_lens_list: List of parameter dicts for each profile
-        lens_redshift_list: List of redshifts for each plane
-        substructure_count: Total count of substructure elements added
+    Builds an SIE + external shear macro model and adds the requested substructure.
+
+    CDM: point-mass subhalos with masses from dN/dm ~ m^beta, placed at radius
+    r ~ U(r_min, r_max) arcsec and uniform angle (DeepLenseSim `make_old_cdm`).
+    Axion: a straight vortex string of point masses through the lens center, with
+    half-length set by the de Broglie scale (DeepLenseSim `make_vortex`).
     """
     if rng is None:
         rng = np.random.RandomState()
+    theta_e_main = theta_E if theta_E is not None else main_einstein_radius(lens_params, z_lens, z_source, cosmo)
 
-    cosmo = FlatLambdaCDM(H0=cosmo_config.H0, Om0=cosmo_config.Om0, Ob0=cosmo_config.Ob0)
-
-    # Calculate main halo Einstein radius if not explicitly provided
-    if lens_params.theta_E is not None:
-        theta_e_main = lens_params.theta_E
-    else:
-        theta_e_main = compute_einstein_radius(lens_params.mass_solar, z_lens, z_source, cosmo)
-
-    # Base Macro Model: SIE (Singular Isothermal Ellipsoid) + External Shear
-    lens_model_list = ["SIE", "SHEAR"]
-    kwargs_lens_list = [
+    model_list = ["SIE", "SHEAR"]
+    kwargs_list: List[Dict[str, Any]] = [
         {
             "theta_E": theta_e_main,
             "e1": lens_params.e1,
@@ -105,82 +143,49 @@ def build_lens_model(
             "center_x": lens_params.center_x,
             "center_y": lens_params.center_y,
         },
-        {
-            "gamma1": lens_params.gamma1,
-            "gamma2": lens_params.gamma2,
-        },
+        {"gamma1": lens_params.gamma1, "gamma2": lens_params.gamma2},
     ]
-    lens_redshift_list = [z_lens, z_lens]
-    substructure_count = 0
+    realization = LensModelRealization(model_list, kwargs_list, theta_e_main)
+    # Point-mass theta_E scales as sqrt(M): compute the distance factor once
+    theta_per_sqrt_msun = compute_einstein_radius(1.0, z_lens, z_source, cosmo)
 
-    # 1. No Substructure
-    if substructure_type in ("no_sub", "none"):
-        return lens_model_list, kwargs_lens_list, lens_redshift_list, substructure_count
-
-    # 2. Cold Dark Matter (CDM) Subhalos
-    elif substructure_type == "cdm":
-        if cdm_params is None:
-            cdm_params = CDMSubstructureParameters()
-
-        # Sample number of subhalos from Poisson distribution
-        n_halos = int(rng.poisson(cdm_params.n_sub))
+    if substructure_type == "cdm":
+        cdm = cdm_params or CDMSubstructureParameters()
+        n_halos = int(rng.poisson(cdm.n_sub)) if cdm.poisson_count else cdm.n_sub
         if n_halos > 0:
-            # Draw subhalo masses from power-law dN/dm ~ m^beta
+            # Inverse-CDF sampling of a truncated power law
+            b = cdm.beta + 1.0
             u_vals = rng.uniform(0.0, 1.0, size=n_halos)
-            b = cdm_params.beta + 1.0
-            m_low_u = cdm_params.m_sub_min ** b
-            m_high_u = cdm_params.m_sub_max ** b
-            sub_masses = (m_low_u + (m_high_u - m_low_u) * u_vals) ** (1.0 / b)
-
-            # Convert subhalo masses to Einstein radii
-            theta_sub = [
-                compute_einstein_radius(m, z_lens, z_source, cosmo)
-                for m in sub_masses
-            ]
-
-            # Distribute subhalos in an annulus around the Einstein ring
-            r_annulus = rng.uniform(0.25 * theta_e_main, 1.75 * theta_e_main, size=n_halos)
-            phi_annulus = rng.uniform(0.0, 2.0 * np.pi, size=n_halos)
-            sub_x = r_annulus * np.cos(phi_annulus) + lens_params.center_x
-            sub_y = r_annulus * np.sin(phi_annulus) + lens_params.center_y
-
-            for i in range(n_halos):
-                lens_model_list.append("POINT_MASS")
-                kwargs_lens_list.append({
-                    "theta_E": float(theta_sub[i]),
-                    "center_x": float(sub_x[i]),
-                    "center_y": float(sub_y[i]),
+            lo, hi = cdm.m_sub_min ** b, cdm.m_sub_max ** b
+            masses = (lo + (hi - lo) * u_vals) ** (1.0 / b)
+            r = rng.uniform(cdm.r_min, cdm.r_max, size=n_halos)
+            phi = rng.uniform(0.0, 2.0 * np.pi, size=n_halos)
+            for m, ri, ph in zip(masses, r, phi):
+                model_list.append("POINT_MASS")
+                kwargs_list.append({
+                    "theta_E": float(theta_per_sqrt_msun * np.sqrt(m)),
+                    "center_x": float(ri * np.cos(ph) + lens_params.center_x),
+                    "center_y": float(ri * np.sin(ph) + lens_params.center_y),
                 })
-                lens_redshift_list.append(z_lens)
+            realization.substructure_count = n_halos
+            realization.substructure_mass = float(np.sum(masses))
 
-            substructure_count = n_halos
-
-    # 3. Wave / Axion Dark Matter Vortex
     elif substructure_type == "axion":
-        if axion_params is None:
-            axion_params = AxionSubstructureParameters()
-
-        res = axion_params.resolution_elements
-        sub_element_mass = axion_params.vortex_mass / float(res)
-        e_sub = compute_einstein_radius(sub_element_mass, z_lens, z_source, cosmo)
-
-        de_broglie = axion_mass_to_de_broglie_arcsec(axion_params.axion_mass_eV)
-        coords = np.linspace(-de_broglie, de_broglie, res)
+        axion = axion_params or AxionSubstructureParameters()
+        m_a = axion.axion_mass_eV if axion.axion_mass_eV is not None else sample_axion_mass(rng)
+        res = axion.resolution_elements
+        theta_element = float(theta_per_sqrt_msun * np.sqrt(axion.vortex_mass / res))
+        half_length = axion_mass_to_de_broglie_arcsec(m_a)
         ang = rng.uniform(0.0, 2.0 * np.pi)
-
-        # Distribute elements along rotated filament crossing the critical curve
-        for x_coord in coords:
-            rx = x_coord * np.cos(ang) + lens_params.center_x
-            ry = x_coord * np.sin(ang) + lens_params.center_y
-
-            lens_model_list.append("POINT_MASS")
-            kwargs_lens_list.append({
-                "theta_E": float(e_sub),
-                "center_x": float(rx),
-                "center_y": float(ry),
+        for t in np.linspace(-half_length, half_length, res):
+            model_list.append("POINT_MASS")
+            kwargs_list.append({
+                "theta_E": theta_element,
+                "center_x": float(t * np.cos(ang) + lens_params.center_x),
+                "center_y": float(t * np.sin(ang) + lens_params.center_y),
             })
-            lens_redshift_list.append(z_lens)
+        realization.substructure_count = res
+        realization.substructure_mass = float(axion.vortex_mass)
+        realization.axion_mass_eV = m_a
 
-        substructure_count = res
-
-    return lens_model_list, kwargs_lens_list, lens_redshift_list, substructure_count
+    return realization

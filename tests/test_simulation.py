@@ -41,7 +41,7 @@ def test_model_i_ground_benchmark():
     assert bundle.kappa_maps.shape == (1, 150, 150)
     assert bundle.source_planes.shape == (1, 150, 150)
     assert bundle.output_metadata.success is True
-    assert bundle.output_metadata.images_metadata[0].estimated_snr > 10.0
+    assert bundle.output_metadata.images_metadata[0].snr > 10.0
 
 
 def test_model_ii_euclid_survey():

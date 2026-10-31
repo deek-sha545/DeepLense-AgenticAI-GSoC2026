@@ -4,7 +4,7 @@
 [![Pydantic v2](https://img.shields.io/badge/pydantic-v2-green.svg)](https://docs.pydantic.dev/)
 [![Pydantic AI](https://img.shields.io/badge/pydantic--ai-framework-purple.svg)](https://ai.pydantic.dev/)
 [![Lenstronomy](https://img.shields.io/badge/physics-lenstronomy-orange.svg)](https://github.com/lenstronomy/lenstronomy)
-[![Tests](https://img.shields.io/badge/tests-11%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-37%20passed-brightgreen.svg)]()
 
 > **Submission for Google Summer of Code (GSoC) 2026**  
 > **Organization**: Machine Learning for Science (ML4SCI) / CERN  
@@ -48,19 +48,31 @@ flowchart TD
 
 ## 3. Supported Model Configurations & Dark Matter Physics
 
-Our architecture supports all four DeepLense paper configurations across all three dark matter substructure classes:
+Defaults follow the reference [DeepLenseSim](https://github.com/mwt5345/DeepLenseSim) code: $z_l = 0.5$, $z_s = 1.0$, an SIE main halo of $10^{12} M_\odot$ ($\theta_E \approx 1.66''$) with $e_1 = 0.1$ and external shear $\gamma_1 = 0.05$.
 
-| Configuration | Instrument / Survey | Resolution | Pixel Scale | PSF / Systematics | Typical SNR |
-| :--- | :--- | :---: | :---: | :--- | :---: |
-| **Model I** | Ground-Based Benchmark | 150 × 150 px | 0.05" / px | Gaussian PSF ($\text{FWHM}=0.087''$), Background noise | ~25 |
-| **Model II** | Space-Based Euclid VIS Survey | 64 × 64 px | 0.10" / px | Euclid VIS diffraction-limited optics | ~80 |
-| **Model III** | Space-Based Hubble Space Telescope (HST) | 64 × 64 px | 0.05" / px | HST WFC3/ACS F814W characteristics | ~40 |
-| **Model IV** | High-Fidelity Euclid Extended | 64 × 64 px | 0.10" / px | Extended realistic morphology | ~80 |
+| Configuration | Instrument | Resolution | Pixel scale | PSF / noise | Source |
+| :--- | :--- | :---: | :---: | :--- | :--- |
+| **Model I** | Generic optical benchmark | 150 × 150 | 0.05″ | Gaussian FWHM 0.087″, background RMS 0.01, $t_{exp} \sim 10^{U(3,3.5)}$ s | Sérsic (amplitude units) |
+| **Model II** | Euclid VIS (lenstronomy config) | 64 × 64 | 0.101″ | Gaussian 0.16″, sky 22.3 mag/″², read noise, 4 × 566 s | Sérsic, mag 20 |
+| **Model III** | HST WFC3 F160W (lenstronomy config) | 64 × 64 | 0.08″ | Gaussian 0.08″, sky 22.3 mag/″², 5400 s | Sérsic, mag 20 |
+| **Model IV** | Euclid VIS (lenstronomy config) | 64 × 64 | 0.101″ | as Model II, plus two-component Sérsic lens light; $\theta_E = 1.5''$, round SIE | Interpolated galaxy image |
 
-### Dark Matter Substructure Classes:
-1. **`no_sub`**: Smooth Singular Isothermal Ellipsoid (SIE) + External Shear ($\gamma_1, \gamma_2$).
-2. **`cdm`**: Cold Dark Matter subhalo population drawn from a power-law subhalo mass function ($dN/dm \propto m^\beta$) distributed in an annulus around the critical curve.
-3. **`axion`**: Ultra-light axion / Wave Dark Matter vortex filaments parameterized by de Broglie wavelength scale $\lambda_{\text{dB}} \propto 1 / m_a$.
+Model IV's source is a real galaxy image through lenstronomy's `INTERPOL` profile. Pass `source_params.galaxy_image_path` pointing at `Galaxy10_DECals.h5` (class 6, $z < 0.02$, as in DeepLenseSim) or any `.npy`/`.fits`/`.png` image; without one, a seeded procedural spiral (bulge, logarithmic arms, star-forming clumps) is used so the model works out of the box.
+
+### Dark Matter Substructure Classes
+1. **`no_sub`**: Smooth SIE + external shear.
+2. **`cdm`**: 25 point-mass subhalos with masses in $[10^6, 10^{10}] M_\odot$ from $dN/dm \propto m^{\beta}$ ($\beta = -0.9$ as in DeepLenseSim; set $-1.9$ for the CDM-theory slope), placed at $r \sim U(0.25'', 2'')$. Optional Poisson count.
+3. **`axion`**: A vortex string of 100 point masses ($3 \times 10^{10} M_\odot$ total) through the lens center, half-length set by the de Broglie scale $\lambda \propto 1/m_a$; $m_a$ is drawn log-uniformly from $10^{-24}$ to $10^{-22}$ eV per image unless given.
+
+The main $\theta_E$ comes from the halo mass (point-mass relation, as DeepLenseSim), a velocity dispersion ($\theta_E = 4\pi(\sigma/c)^2 D_{ls}/D_s$), or a direct value.
+
+### Outputs and diagnostics
+- **Arc SNR**: $\sum \text{arc} / \sqrt{\sum \sigma^2}$ over pixels where the noiseless lensed source exceeds the background RMS, with $\sigma^2 = \sigma_{bkg}^2 + \text{model}/t_{exp}$. The best single-pixel SNR is reported too.
+- **Convergence maps** are pixel-averaged: point masses deposit $\pi\theta_E^2$ into their pixel, so CDM subhalos and vortices are visible (lenstronomy's analytic $\kappa$ of a point mass is a delta function and would show nothing).
+- **Reproducibility**: all randomness (substructure, source position, exposure, noise) comes from one seeded generator; the seed is drawn and recorded when not given, so any run can be replayed exactly.
+
+### Differences from DeepLenseSim
+Reading the reference code, a few issues stand out that this implementation avoids: in `lens.py` the Model II/III path computes noise but stores `image_real = image_model + image_model`, `set_instrument` only has a Euclid branch, and the Einstein radius uses luminosity distances with $D_{ls} = D_s - D_l$ (here: angular diameter distances). Model IV there uses pyHalo realizations for substructure; here Model IV uses the same CDM/axion generators as Models I-III so all four configurations share one substructure definition.
 
 ---
 
@@ -71,6 +83,10 @@ When a user submits an under-specified prompt (e.g., *"Simulate a lens with subh
 2. Proposes physically plausible cosmological values ($z_l=0.5, z_s=1.5$).
 3. Returns structured `ClarificationQuestion` items with the **scientific rationale** explaining why those parameters matter.
 4. Pauses compute execution until the user reviews, refines, or confirms.
+
+The pause is enforced by the framework, not just the prompt: `tool_execute_simulation` is registered with `requires_approval=True`, so an agent run that wants to simulate ends with a `DeferredToolRequests` and only continues when the session passes back the user's approval (`session.approve()`) or denial (`session.reject(reason)`). Invalid physics (e.g. $z_l \ge z_s$) raised by the Pydantic guardrails is returned to the LLM as `ModelRetry`, so it can explain the problem and propose valid values.
+
+Without an LLM configured, `DeepLenseWorkflowSession` falls back to a deterministic rule-based parser that drives the same tools, so tests and demos run offline.
 
 ---
 
@@ -85,6 +101,7 @@ When a user submits an under-specified prompt (e.g., *"Simulate a lens with subh
 │   ├── simulation/                   # Physics simulation engine
 │   │   ├── instruments.py            # Model I–IV survey profiles
 │   │   ├── substructures.py          # Dark matter physics (SIE, CDM, Axion)
+│   │   ├── sources.py                # Model IV galaxy sources (Galaxy10 / images / procedural)
 │   │   └── core.py                   # Lenstronomy wrapper & batch runner
 │   ├── agent/                        # Pydantic AI agent & workflow
 │   │   ├── prompts.py                # Astrophysical system prompts
@@ -95,10 +112,12 @@ When a user submits an under-specified prompt (e.g., *"Simulate a lens with subh
 │       └── plotting.py               # 4-panel astrophysical diagnostic suite
 ├── notebooks/
 │   └── deeplense_agentic_workflow.ipynb # Complete interactive demonstration notebook
-├── tests/                            # Automated test suite (11 unit tests)
+├── tests/                            # Automated test suite (37 tests)
 │   ├── test_models.py                # Pydantic validation tests
 │   ├── test_simulation.py            # Simulation output & SNR tests
+│   ├── test_physics.py               # Physics sanity checks & parameter tools
 │   └── test_workflow.py              # Tool registration & HITL dialogue tests
+├── app.py                            # Streamlit web app
 ├── requirements.txt                  # Python dependencies
 ├── pytest.ini                        # Pytest configuration
 └── README.md                         # Documentation
@@ -125,30 +144,48 @@ pip install -r requirements.txt
 ```bash
 pytest tests/
 ```
-All 11 tests will pass with complete validation:
+The full suite runs in about two seconds:
 ```text
-tests/test_models.py ....                                                [ 36%]
-tests/test_simulation.py ....                                            [ 72%]
-tests/test_workflow.py ...                                               [100%]
-============================== 11 passed in 1.72s ==============================
+tests/test_models.py ....                                                [ 10%]
+tests/test_physics.py ................                                   [ 54%]
+tests/test_simulation.py ....                                            [ 64%]
+tests/test_workflow.py .............                                     [100%]
+============================== 37 passed in 2.26s ==============================
 ```
+
+### Web App
+
+```bash
+streamlit run app.py
+```
+
+Pick a model in the sidebar and paste an API key, or use the offline parser. To deploy on [Streamlit Community Cloud](https://share.streamlit.io), push the repo to GitHub, create an app pointing at `app.py`, and optionally add a server key under *Settings → Secrets*:
+
+```toml
+GROQ_API_KEY = "gsk_..."        # default model: openai/gpt-oss-120b on Groq
+# ANTHROPIC_API_KEY = "sk-ant-..."  # or any other supported provider
+```
+
+Keys typed in the sidebar are passed directly to the model provider for that browser session and are never written to the environment.
 
 ### Interactive Usage Example
 ```python
 from deeplense_agent import DeepLenseWorkflowSession
 
-# 1. Initialize session
-session = DeepLenseWorkflowSession()
+# 1. LLM agent (needs GROQ_API_KEY); any pydantic-ai model or model string works.
+#    DeepLenseWorkflowSession() with no model uses the offline rule-based parser.
+session = DeepLenseWorkflowSession(agent_llm="groq:openai/gpt-oss-120b")
 
-# 2. Turn 1: High-level prompt
-r1 = session.chat("Simulate a strong gravitational lens with CDM subhalos.")
-print(r1.message)  # Prompts with HITL questions for redshifts and survey
+# 2. The agent builds a validated plan and flags defaulted values
+r1 = session.chat("Axion vortex lens on HST with z_source 2, 3 images, seed 11")
+print(r1.plan.summary)
 
-# 3. Turn 2: User clarification and confirmation
-r2 = session.chat("Use Euclid Model_II with z_lens=0.5 and z_source=1.5, please execute.")
-print(r2.message)  # Confirms simulation execution and displays metadata
+# 3. Nothing runs until a human approves ("yes" in chat, or session.approve()).
+#    Any other reply is passed back to the agent as a requested change.
+r2 = session.chat("yes")
+print(r2.execution_output.random_seed, r2.bundle.images_observed.shape)
 
-# 4. Render 4-panel diagnostic figure
+# 4. Render the 4-panel diagnostic figure
 session.plot_latest()
 ```
 
@@ -175,7 +212,7 @@ It includes:
 
 ## 8. Compliance with GSoC 2026 Evaluation Metrics
 
-- **Quality of agent architecture and tool design**: Modular Pydantic AI agent with 4 registered tools and dedicated session state management.
-- **Correctness of generated simulations**: Physics-grounded cosmology solving the lens equation with proper angular diameter distances ($D_l, D_s, D_{ls}$) and Poisson/detector noise.
-- **Structured output validation**: Every simulation delivers strongly typed Pydantic models with dimensions, SNR, Einstein radii, and subhalo counts.
-- **Code modularity**: Clean separation between data contracts, astrophysics solvers, agent orchestration, and visualization.
+- **Agent architecture and tool design**: Pydantic AI agent with typed tools covering every physical knob; plan and refine share one validated update path; execution gated by `requires_approval`; invalid physics returned to the LLM as `ModelRetry`. Works with Groq, Anthropic, OpenAI or Gemini, and offline.
+- **Correctness of simulations**: lenstronomy survey configurations for Euclid and HST, DeepLenseSim-matched lens and substructure models, seeded noise, and physics tests (Einstein radius scalings, noise level vs reported background, SNR vs magnitude, substructure placement, vortex length vs axion mass).
+- **Structured output validation**: every run returns Pydantic models with per-image Einstein radius, arc SNR, exposure, background, source position, substructure mass and the reproducing seed.
+- **Code modularity**: data contracts, physics, agent orchestration, visualization and the Streamlit app are separate layers.

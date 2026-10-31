@@ -56,4 +56,4 @@ def test_substructure_auto_population():
 
     cfg_axion = SubstructureConfig(substructure_type=SubstructureType.AXION)
     assert cfg_axion.axion_params is not None
-    assert cfg_axion.axion_params.axion_mass_eV == 1e-22
+    assert cfg_axion.axion_params.axion_mass_eV is None  # drawn per image from 1e-24..1e-22 eV

@@ -2,7 +2,7 @@
 Pydantic Models for Agent Outputs, Structured Metadata, and Human-in-the-Loop Interactions.
 """
 
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Any, Tuple
 from pydantic import BaseModel, Field
 from deeplense_agent.models.parameters import (
     SimulationParameters,
@@ -55,8 +55,16 @@ class SingleImageMetadata(BaseModel):
     min_intensity: float = Field(..., description="Minimum pixel flux intensity")
     max_intensity: float = Field(..., description="Peak pixel flux intensity")
     mean_intensity: float = Field(..., description="Mean pixel flux intensity")
-    estimated_snr: float = Field(..., description="Estimated signal-to-noise ratio")
+    snr: float = Field(..., description="Integrated SNR of the lensed arc over pixels above the background RMS")
+    peak_snr: float = Field(..., description="Highest single-pixel SNR of the lensed arc")
+    exposure_time_s: float = Field(..., description="Effective exposure time in seconds")
+    background_rms: float = Field(..., description="Background noise RMS per pixel (counts/s)")
+    source_center_arcsec: Tuple[float, float] = Field(..., description="Source position offset in arcsec")
+    source_type: str = Field(..., description="'sersic', 'galaxy_image' or 'procedural_galaxy'")
+    lens_light: bool = Field(default=False, description="Whether deflector light is included")
     subhalo_count: int = Field(default=0, description="Number of substructure components injected")
+    substructure_mass_msun: float = Field(default=0.0, description="Total injected substructure mass in M_sun")
+    axion_mass_eV: Optional[float] = Field(default=None, description="Axion mass used for the vortex, if any")
     notes: List[str] = Field(default_factory=list, description="Astrophysical notes or warnings")
 
 
@@ -71,5 +79,6 @@ class SimulationExecutionOutput(BaseModel):
     model_configuration: ModelConfiguration = Field(..., description="Configuration executed")
     substructure_type: SubstructureType = Field(..., description="Substructure type simulated")
     images_metadata: List[SingleImageMetadata] = Field(..., description="Per-image structured metadata")
+    random_seed: int = Field(..., description="Seed that reproduces this run exactly")
     execution_time_seconds: float = Field(..., description="Elapsed wall-clock runtime")
     summary: str = Field(..., description="Summary of the simulated images and physical characteristics")
