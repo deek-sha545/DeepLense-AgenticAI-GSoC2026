@@ -5,7 +5,7 @@
 [![Pydantic v2](https://img.shields.io/badge/pydantic-v2-green.svg)](https://docs.pydantic.dev/)
 [![Pydantic AI](https://img.shields.io/badge/pydantic--ai-framework-purple.svg)](https://ai.pydantic.dev/)
 [![Lenstronomy](https://img.shields.io/badge/physics-lenstronomy-orange.svg)](https://github.com/lenstronomy/lenstronomy)
-[![Tests](https://img.shields.io/badge/tests-37%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-43%20passed-brightgreen.svg)]()
 
 > **Submission for Google Summer of Code (GSoC) 2026**  
 > **Organization**: Machine Learning for Science (ML4SCI) / CERN  
@@ -88,7 +88,20 @@ When a user submits an under-specified prompt (e.g., *"Simulate a lens with subh
 
 The pause is enforced by the framework, not just the prompt: `tool_execute_simulation` is registered with `requires_approval=True`, so an agent run that wants to simulate ends with a `DeferredToolRequests` and only continues when the session passes back the user's approval (`session.approve()`) or denial (`session.reject(reason)`). Invalid physics (e.g. $z_l \ge z_s$) raised by the Pydantic guardrails is returned to the LLM as `ModelRetry`, so it can explain the problem and propose valid values.
 
+Every LLM turn ends in a structured `AgentReply` (`message`, `intent`, `defaulted_parameters`) rather than free text. An output validator checks it against the session before the user sees it: a reply claiming results when nothing has run, or listing defaults the plan never flagged, is sent back to the model as `ModelRetry`.
+
 Without an LLM configured, `DeepLenseWorkflowSession` falls back to a deterministic rule-based parser that drives the same tools, so tests and demos run offline.
+
+### Agent benchmark
+
+The physics tests check the simulator; `deeplense_agent.evaluation` checks the agent. It holds 26 labelled prompts (22 valid requests, including paraphrases such as "cold dark matter" or "lens redshift 0.6", and 4 unphysical ones) and scores any planner on field precision/recall/F1 over the stated parameters, per-prompt exact match, guardrails (no unphysical plan stored), HITL (omitted redshifts flagged) and the approval gate (nothing executed while planning).
+
+```bash
+python -m deeplense_agent.evaluation                                   # offline parser
+python -m deeplense_agent.evaluation --model groq:openai/gpt-oss-120b  # plus an LLM (needs GROQ_API_KEY)
+```
+
+<!-- BENCHMARK_TABLE -->
 
 ---
 
@@ -99,7 +112,7 @@ Without an LLM configured, `DeepLenseWorkflowSession` falls back to a determinis
 ├── deeplense_agent/                  # Core Python package
 │   ├── models/                       # Pydantic parameter & response models
 │   │   ├── parameters.py             # Astrophysical constraints & models
-│   │   └── responses.py              # Structured metadata & HITL questions
+│   │   └── responses.py              # Structured metadata, HITL questions & AgentReply
 │   ├── simulation/                   # Physics simulation engine
 │   │   ├── instruments.py            # Model I–IV survey profiles
 │   │   ├── substructures.py          # Dark matter physics (SIE, CDM, Axion)
@@ -110,11 +123,14 @@ Without an LLM configured, `DeepLenseWorkflowSession` falls back to a determinis
 │   │   ├── tools.py                  # Agent tools (plan, refine, simulate, inspect)
 │   │   ├── agent.py                  # Pydantic AI agent factory
 │   │   └── workflow.py               # Multi-turn HITL session controller
+│   ├── evaluation/
+│   │   └── benchmark.py              # NL-to-parameters agent benchmark (26 prompts)
 │   └── visualization/
 │       └── plotting.py               # 4-panel astrophysical diagnostic suite
 ├── notebooks/
 │   └── deeplense_agentic_workflow.ipynb # Complete interactive demonstration notebook
-├── tests/                            # Automated test suite (37 tests)
+├── tests/                            # Automated test suite (43 tests)
+│   ├── test_benchmark.py             # Benchmark scoring & safety properties
 │   ├── test_models.py                # Pydantic validation tests
 │   ├── test_simulation.py            # Simulation output & SNR tests
 │   ├── test_physics.py               # Physics sanity checks & parameter tools
@@ -148,11 +164,12 @@ pytest tests/
 ```
 The full suite runs in about two seconds:
 ```text
-tests/test_models.py ....                                                [ 10%]
-tests/test_physics.py ................                                   [ 54%]
-tests/test_simulation.py ....                                            [ 64%]
-tests/test_workflow.py .............                                     [100%]
-============================== 37 passed in 2.26s ==============================
+tests/test_benchmark.py ....                                             [  9%]
+tests/test_models.py ....                                                [ 18%]
+tests/test_physics.py ................                                   [ 55%]
+tests/test_simulation.py ....                                            [ 65%]
+tests/test_workflow.py ...............                                   [100%]
+============================== 43 passed in 2.98s ==============================
 ```
 
 ### Web App
@@ -209,8 +226,9 @@ It includes:
    - Radial surface brightness profiles.
 5. Comparative gallery across all four configurations (Model I, II, III and IV).
 6. Structured metadata extraction and evaluation tables.
+7. Agent benchmark comparing the offline parser and an LLM (section 8c).
 
-**A note on the 90:10 train-test split:** that requirement applies to the ML tasks. Specific Test II trains no model, so there is no validation split and no weights to submit. This submission is evaluated on agent architecture, simulation correctness (covered by `tests/test_physics.py`), structured output validation and modularity, as listed in section 8.
+**A note on the 90:10 train-test split:** that requirement applies to the ML tasks. Specific Test II trains no model, so there is no validation split and no weights to submit. The agent is instead evaluated on the 26-prompt benchmark in section 4, and simulation correctness by `tests/test_physics.py`.
 
 ---
 
@@ -218,5 +236,6 @@ It includes:
 
 - **Agent architecture and tool design**: Pydantic AI agent with typed tools covering every physical knob; plan and refine share one validated update path; execution gated by `requires_approval`; invalid physics returned to the LLM as `ModelRetry`. Works with Groq, Anthropic, OpenAI or Gemini, and offline.
 - **Correctness of simulations**: lenstronomy survey configurations for Euclid and HST, DeepLenseSim-matched lens and substructure models, seeded noise, and physics tests (Einstein radius scalings, noise level vs reported background, SNR vs magnitude, substructure placement, vortex length vs axion mass).
-- **Structured output validation**: every run returns Pydantic models with per-image Einstein radius, arc SNR, exposure, background, source position, substructure mass and the reproducing seed.
+- **Structured output validation**: every run returns Pydantic models with per-image Einstein radius, arc SNR, exposure, background, source position, substructure mass and the reproducing seed, and every LLM turn ends in a validated `AgentReply` that is checked against the session state.
+- **Agent evaluation**: a 26-prompt natural-language-to-parameters benchmark reports field F1, exact match, guardrail, HITL and approval-gate metrics for the offline parser and the LLM (notebook section 8c).
 - **Code modularity**: data contracts, physics, agent orchestration, visualization and the Streamlit app are separate layers.

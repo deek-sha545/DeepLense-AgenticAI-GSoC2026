@@ -11,6 +11,7 @@ from deeplense_agent.models import (
     SimulationPlan,
     SingleImageMetadata,
     SimulationExecutionOutput,
+    AgentReply,
 )
 from deeplense_agent.simulation import (
     DeepLenseSimulationEngine,
@@ -37,6 +38,7 @@ __all__ = [
     "SimulationPlan",
     "SingleImageMetadata",
     "SimulationExecutionOutput",
+    "AgentReply",
     "DeepLenseSimulationEngine",
     "SimulationResultBundle",
     "create_pydantic_ai_agent",

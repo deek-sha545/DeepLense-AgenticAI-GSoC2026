@@ -14,6 +14,7 @@ from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError, UnexpectedMode
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, UserPromptPart
 
 from deeplense_agent.models.responses import (
+    AgentReply,
     SimulationPlan,
     ClarificationQuestion,
     SimulationExecutionOutput,
@@ -55,6 +56,7 @@ class AgentTurnResponse:
         clarifications: Optional[List[ClarificationQuestion]] = None,
         execution_output: Optional[SimulationExecutionOutput] = None,
         bundle: Optional[SimulationResultBundle] = None,
+        reply: Optional[AgentReply] = None,
     ):
         self.message = message
         self.state = state
@@ -62,6 +64,7 @@ class AgentTurnResponse:
         self.clarifications = clarifications or []
         self.execution_output = execution_output
         self.bundle = bundle
+        self.reply = reply  # the LLM's validated structured answer, when one was produced
 
     def __repr__(self) -> str:
         return f"<AgentTurnResponse state={self.state.value} message='{self.message[:60]}...'>"
@@ -199,25 +202,28 @@ class DeepLenseWorkflowSession:
                 text = f"Ready to run: {plan.summary}"
             return AgentTurnResponse(message=text + "\n\nApprove this run?", state=self.state, plan=plan)
 
+        reply: AgentReply = result.output
         bundle = self.ctx.last_result
         if bundle is not None and bundle is not previous_result:
             self.state = WorkflowState.COMPLETED
             return AgentTurnResponse(
-                message=result.output,
+                message=reply.message,
                 state=self.state,
                 plan=plan,
                 execution_output=bundle.output_metadata,
                 bundle=bundle,
+                reply=reply,
             )
 
         # A plan that differs from what was last executed is still waiting on the user.
         if self.has_unexecuted_plan:
             self.state = WorkflowState.CLARIFICATION_PENDING
         return AgentTurnResponse(
-            message=result.output,
+            message=reply.message,
             state=self.state,
             plan=plan,
             clarifications=plan.clarifications if plan else [],
+            reply=reply,
         )
 
     def _chat_rule_based(self, text: str) -> AgentTurnResponse:

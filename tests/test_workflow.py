@@ -61,17 +61,24 @@ from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolRetu
 from pydantic_ai.models.function import FunctionModel
 
 
+def _reply(message, intent, defaulted=()):
+    """A structured AgentReply, sent the way an LLM would: as a call to the output tool."""
+    return ModelResponse(parts=[ToolCallPart(
+        "final_result", {"message": message, "intent": intent, "defaulted_parameters": list(defaulted)}
+    )])
+
+
 def _scripted_llm(messages, info):
     """Plans on the first user turn, then requests execution, then reports."""
     last = messages[-1].parts
     returned = {p.tool_name for p in last if isinstance(p, ToolReturnPart)}
     if any(isinstance(p, RetryPromptPart) for p in last):
-        return ModelResponse(parts=[TextPart("z_lens must be below z_source. Try z_lens=0.5, z_source=1.5?")])
+        return _reply("z_lens must be below z_source. Try z_lens=0.5, z_source=1.5?", "invalid_request")
     if "tool_execute_simulation" in returned:
         content = next(p.content for p in last if isinstance(p, ToolReturnPart))
         if isinstance(content, str) and "did not approve" in content:
-            return ModelResponse(parts=[TextPart("Understood, not running it.")])
-        return ModelResponse(parts=[TextPart("Done.")])
+            return _reply("Understood, not running it.", "plan")
+        return _reply("Done.", "results")
     if "tool_plan_simulation" in returned:
         return ModelResponse(parts=[ToolCallPart("tool_execute_simulation", {})])
     prompt = next(p.content for p in last if p.part_kind == "user-prompt")
@@ -150,3 +157,28 @@ def test_llm_session_works_inside_running_event_loop():
 
     resp = asyncio.run(inside_loop())  # e.g. Jupyter
     assert resp.state == WorkflowState.READY_TO_EXECUTE
+
+
+def test_llm_final_answer_is_structured():
+    session = DeepLenseWorkflowSession(agent_llm=FunctionModel(_scripted_llm))
+    session.chat("CDM lens on HST, zl 0.4 zs 2")
+    resp = session.approve()
+    assert resp.reply is not None and resp.reply.intent == "results"
+    assert resp.message == resp.reply.message == "Done."
+
+
+def _model_that_claims_results_first(messages, info):
+    """Claims a finished run before anything ran, then corrects itself after the validator objects."""
+    last = messages[-1].parts
+    if any(isinstance(p, RetryPromptPart) for p in last):
+        return _reply("Nothing has run yet. Want me to plan a simulation?", "other")
+    return _reply("Your simulation finished with theta_E = 1.2 arcsec.", "results", ["z_lens"])
+
+
+def test_output_validator_rejects_replies_that_contradict_the_session():
+    session = DeepLenseWorkflowSession(agent_llm=FunctionModel(_model_that_claims_results_first))
+    resp = session.chat("how did my run go?")
+    assert resp.reply.intent == "other"
+    assert "Nothing has run yet" in resp.message
+    retries = [p for m in session.message_history for p in m.parts if isinstance(p, RetryPromptPart)]
+    assert retries and "No simulation has run yet" in str(retries[0].content)

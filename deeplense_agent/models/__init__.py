@@ -18,6 +18,7 @@ from deeplense_agent.models.responses import (
     SimulationPlan,
     SingleImageMetadata,
     SimulationExecutionOutput,
+    AgentReply,
 )
 
 __all__ = [
@@ -36,4 +37,5 @@ __all__ = [
     "SimulationPlan",
     "SingleImageMetadata",
     "SimulationExecutionOutput",
+    "AgentReply",
 ]

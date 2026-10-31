@@ -2,7 +2,7 @@
 Pydantic Models for Agent Outputs, Structured Metadata, and Human-in-the-Loop Interactions.
 """
 
-from typing import List, Optional, Any, Tuple
+from typing import List, Literal, Optional, Any, Tuple
 from pydantic import BaseModel, Field
 from deeplense_agent.models.parameters import (
     SimulationParameters,
@@ -82,3 +82,21 @@ class SimulationExecutionOutput(BaseModel):
     random_seed: int = Field(..., description="Seed that reproduces this run exactly")
     execution_time_seconds: float = Field(..., description="Elapsed wall-clock runtime")
     summary: str = Field(..., description="Summary of the simulated images and physical characteristics")
+
+
+class AgentReply(BaseModel):
+    """
+    Structured final answer of the agent for one conversational turn.
+    Checked against the session state by the agent's output validator before it reaches the user.
+    """
+    message: str = Field(..., min_length=1, description="Markdown reply shown to the user")
+    intent: Literal["plan", "results", "explanation", "invalid_request", "other"] = Field(
+        ...,
+        description="'plan': a plan was made or changed and awaits approval; 'results': reporting a completed run; "
+                    "'explanation': a conceptual answer with no tool use; 'invalid_request': the requested values are unphysical; "
+                    "'other': anything else",
+    )
+    defaulted_parameters: List[str] = Field(
+        default_factory=list,
+        description="Parameters of the current plan that were filled with defaults rather than given by the user",
+    )

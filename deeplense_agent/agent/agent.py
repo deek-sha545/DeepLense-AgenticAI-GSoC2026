@@ -16,11 +16,12 @@ from deeplense_agent.agent.tools import (
     inspect_simulation_quality,
 )
 from deeplense_agent.models.responses import (
+    AgentReply,
     SimulationPlan,
     SimulationExecutionOutput,
 )
 
-AgentOutput = Union[str, DeferredToolRequests]
+AgentOutput = Union[AgentReply, DeferredToolRequests]
 
 
 def explain_error(e: Exception) -> str:
@@ -46,6 +47,9 @@ def create_pydantic_ai_agent(model: Any = None) -> Agent[SimulationSessionContex
     `tool_execute_simulation` requires approval, so a run that tries to execute
     ends with `DeferredToolRequests` and only continues once the caller passes
     back `DeferredToolResults` with the user's decision.
+
+    The final answer of each turn is a structured `AgentReply`, checked against the
+    session state before it is returned; inconsistent replies go back to the LLM.
     """
     if model is None:
         model = TestModel()
@@ -54,7 +58,7 @@ def create_pydantic_ai_agent(model: Any = None) -> Agent[SimulationSessionContex
         model=model,
         system_prompt=DEEPLENSE_SYSTEM_PROMPT,
         deps_type=SimulationSessionContext,
-        output_type=[str, DeferredToolRequests],
+        output_type=[AgentReply, DeferredToolRequests],
         retries=3,
     )
 
@@ -183,5 +187,24 @@ def create_pydantic_ai_agent(model: Any = None) -> Agent[SimulationSessionContex
             return inspect_simulation_quality(ctx.deps)
         except ValueError as e:
             raise ModelRetry(str(e))
+
+    @agent.output_validator
+    def validate_reply(ctx: RunContext[SimulationSessionContext], output: AgentOutput) -> AgentOutput:
+        """Reject replies that contradict the session: results without a run, or invented defaults."""
+        if not isinstance(output, AgentReply):
+            return output
+        plan = ctx.deps.active_plan
+        if output.intent == "results" and ctx.deps.last_result is None:
+            raise ModelRetry("No simulation has run yet, so intent cannot be 'results'. Nothing runs until the user approves.")
+        if output.intent == "plan" and plan is None:
+            raise ModelRetry("There is no plan yet. Call tool_plan_simulation before replying with intent 'plan'.")
+        flagged = {c.parameter_name for c in plan.clarifications} if plan is not None else set()
+        invented = [name for name in output.defaulted_parameters if name not in flagged]
+        if invented:
+            raise ModelRetry(
+                f"defaulted_parameters lists {invented}, but the plan only flagged {sorted(flagged) or 'nothing'}. "
+                "List only parameters from the plan's clarifications."
+            )
+        return output
 
     return agent
